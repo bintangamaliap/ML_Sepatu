@@ -19,13 +19,37 @@ encoder_jenis = joblib.load("encoder_jenis_v4.pkl")
 SUHU_AWAL_MIN, SUHU_AWAL_MAX = 29.0, 34.0
 KELEMBAPAN_AWAL_MIN, KELEMBAPAN_AWAL_MAX = 60.0, 100.0
 
+REQUIRED_FIELDS = ["jenis_sepatu", "suhu_awal", "kelembapan_awal"]
+
+
 @app.route('/prediksi', methods=['POST'])
 def prediksi():
-    data = request.json
+    data = request.get_json(silent=True)
 
-    jenis           = data["jenis_sepatu"]
-    suhu_awal       = data["suhu_awal"]
-    kelembapan_awal = data["kelembapan_awal"]
+    # Body kosong, bukan JSON valid, atau Content-Type salah dari
+    # sisi pemanggil (silent=True membuat ini return None, bukan
+    # exception, jadi harus dicek eksplisit di sini).
+    if data is None:
+        return jsonify({"error": "Body request bukan JSON valid atau kosong"}), 400
+
+    # Field hilang -- sebelumnya ini crash 500 generic (KeyError)
+    # kalau ESP32/pemanggil lain kirim payload tidak lengkap (misal
+    # WiFi putus di tengah serialisasi JSON di firmware).
+    missing = [f for f in REQUIRED_FIELDS if f not in data]
+    if missing:
+        return jsonify({"error": f"Field hilang: {missing}"}), 400
+
+    jenis = data["jenis_sepatu"]
+
+    # Tipe data salah -- sebelumnya ini bisa lolos ke pd.DataFrame
+    # tanpa error lalu menghasilkan prediksi yang tidak masuk akal
+    # tanpa pemberitahuan (lebih berbahaya daripada crash eksplisit),
+    # atau crash 500 kalau operasi numerik gagal total.
+    try:
+        suhu_awal = float(data["suhu_awal"])
+        kelembapan_awal = float(data["kelembapan_awal"])
+    except (ValueError, TypeError):
+        return jsonify({"error": "suhu_awal dan kelembapan_awal harus berupa angka"}), 400
 
     mapping = {"Kanvas": "Canvas", "Kulit": "Leather", "Mesh": "Mesh"}
     jenis = mapping.get(jenis, jenis)
@@ -59,6 +83,7 @@ def prediksi():
         "ekstrapolasi": ekstrapolasi,
         "fallback_dipakai": fallback_dipakai
     })
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
